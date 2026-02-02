@@ -1,8 +1,8 @@
 """Hybrid scam detection using heuristics and LLM."""
 
 import re
+import httpx
 from typing import Tuple, List
-from groq import Groq
 
 from config import get_settings
 
@@ -30,15 +30,14 @@ URGENCY_PATTERNS = [
     r"deadline"
 ]
 
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
 
 class ScamDetector:
     """Hybrid scam detection combining heuristics and LLM classification."""
     
     def __init__(self):
         self.settings = get_settings()
-        self.groq_client = None
-        if self.settings.GROQ_API_KEY:
-            self.groq_client = Groq(api_key=self.settings.GROQ_API_KEY)
     
     def _calculate_heuristic_score(self, message: str) -> Tuple[int, List[str]]:
         """Calculate heuristic scam score based on keywords and patterns."""
@@ -72,8 +71,8 @@ class ScamDetector:
         return score, matched_keywords
     
     def _llm_classify(self, message: str) -> str:
-        """Use Groq LLM to classify message."""
-        if not self.groq_client:
+        """Use Groq LLM to classify message via direct API call."""
+        if not self.settings.GROQ_API_KEY:
             return "UNCERTAIN"
         
         try:
@@ -89,14 +88,24 @@ Message:
 
 Return ONLY one word."""
 
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=10
-            )
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(
+                    GROQ_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self.settings.GROQ_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0,
+                        "max_tokens": 10
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
             
-            result = response.choices[0].message.content.strip().upper()
+            result = data["choices"][0]["message"]["content"].strip().upper()
             
             # Normalize response
             if "SCAM" in result and "NOT" not in result:

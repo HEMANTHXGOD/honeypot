@@ -1,11 +1,13 @@
 """LLM-powered agent brain for engaging scammers."""
 
+import httpx
 from typing import List
-from groq import Groq
 
 from config import get_settings
 from models.session import ConversationTurn
 
+
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Locked victim persona - DO NOT MODIFY
 SYSTEM_PROMPT = """You are an autonomous AI agent acting as a real human victim.
@@ -55,9 +57,6 @@ class AgentBrain:
     
     def __init__(self):
         self.settings = get_settings()
-        self.groq_client = None
-        if self.settings.GROQ_API_KEY:
-            self.groq_client = Groq(api_key=self.settings.GROQ_API_KEY)
     
     def _format_conversation_history(self, history: List[ConversationTurn]) -> str:
         """Format conversation history for context."""
@@ -71,6 +70,33 @@ class AgentBrain:
         
         return "\n".join(formatted)
     
+    def _call_groq(self, messages: list, temperature: float = 0.8, max_tokens: int = 100) -> str:
+        """Make direct API call to Groq."""
+        if not self.settings.GROQ_API_KEY:
+            return None
+        
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.post(
+                    GROQ_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self.settings.GROQ_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"Groq API error: {e}")
+            return None
+    
     def generate_response(
         self, 
         incoming_message: str, 
@@ -78,15 +104,10 @@ class AgentBrain:
     ) -> str:
         """Generate a victim persona response to the scammer's message."""
         
-        if not self.groq_client:
-            # Fallback response if no LLM available
-            return "Ji, what do you mean? I don't understand."
+        # Build user prompt with conversation context
+        history_text = self._format_conversation_history(conversation_history)
         
-        try:
-            # Build user prompt with conversation context
-            history_text = self._format_conversation_history(conversation_history)
-            
-            user_prompt = f"""Conversation so far:
+        user_prompt = f"""Conversation so far:
 {history_text}
 
 Latest message from scammer:
@@ -94,55 +115,41 @@ Latest message from scammer:
 
 Respond as the human victim. Keep it short (1-2 sentences), natural, and slightly worried."""
 
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.8,  # Some creativity for natural responses
-                max_tokens=100
-            )
-            
-            reply = response.choices[0].message.content.strip()
-            
-            # Remove any quotes if LLM added them
-            if reply.startswith('"') and reply.endswith('"'):
-                reply = reply[1:-1]
-            
-            return reply
-            
-        except Exception as e:
-            print(f"Agent brain error: {e}")
-            return "Accha ji, can you explain again please?"
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        reply = self._call_groq(messages, temperature=0.8, max_tokens=100)
+        
+        if not reply:
+            # Fallback response if no LLM available
+            return "Ji, what do you mean? I don't understand."
+        
+        # Remove any quotes if LLM added them
+        if reply.startswith('"') and reply.endswith('"'):
+            reply = reply[1:-1]
+        
+        return reply
     
     def generate_notes(self, conversation_history: List[ConversationTurn]) -> str:
         """Generate agent notes summarizing the interaction."""
-        if not self.groq_client or not conversation_history:
+        if not self.settings.GROQ_API_KEY or not conversation_history:
             return "Scam engagement completed."
         
-        try:
-            history_text = self._format_conversation_history(conversation_history)
-            
-            prompt = f"""Analyze this scam conversation and provide a brief 1-2 sentence summary of the scammer's tactics.
+        history_text = self._format_conversation_history(conversation_history)
+        
+        prompt = f"""Analyze this scam conversation and provide a brief 1-2 sentence summary of the scammer's tactics.
 
 Conversation:
 {history_text}
 
 Summary:"""
 
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=100
-            )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            print(f"Notes generation error: {e}")
-            return "Scam engagement completed."
+        messages = [{"role": "user", "content": prompt}]
+        result = self._call_groq(messages, temperature=0, max_tokens=100)
+        
+        return result if result else "Scam engagement completed."
 
 
 # Global agent brain instance
