@@ -1,6 +1,6 @@
 """LLM-powered agent brain for engaging scammers."""
 
-import httpx
+import requests
 from typing import List
 
 from config import get_settings
@@ -71,28 +71,28 @@ class AgentBrain:
         return "\n".join(formatted)
     
     def _call_groq(self, messages: list, temperature: float = 0.8, max_tokens: int = 100) -> str:
-        """Make direct API call to Groq."""
+        """Make direct API call to Groq using requests."""
         if not self.settings.GROQ_API_KEY:
             return None
         
         try:
-            with httpx.Client(timeout=15.0) as client:
-                response = client.post(
-                    GROQ_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {self.settings.GROQ_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
+            response = requests.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.settings.GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                },
+                timeout=15
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
         except Exception as e:
             print(f"Groq API error: {e}")
             return None

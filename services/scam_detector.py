@@ -1,7 +1,7 @@
 """Hybrid scam detection using heuristics and LLM."""
 
 import re
-import httpx
+import requests
 from typing import Tuple, List
 
 from config import get_settings
@@ -88,22 +88,22 @@ Message:
 
 Return ONLY one word."""
 
-            with httpx.Client(timeout=10.0) as client:
-                response = client.post(
-                    GROQ_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {self.settings.GROQ_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0,
-                        "max_tokens": 10
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = requests.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.settings.GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": 10
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
             
             result = data["choices"][0]["message"]["content"].strip().upper()
             
