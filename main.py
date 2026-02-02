@@ -76,6 +76,21 @@ async def health_check():
     }
 
 
+# Root endpoint
+@app.get("/")
+async def root():
+    """Root endpoint with API info."""
+    return {
+        "name": "Scam Detection Honeypot API",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/health",
+            "chat": "/chat (POST, requires x-api-key)",
+            "docs": "/docs"
+        }
+    }
+
+
 # Debug endpoint to view session (protected)
 @app.get("/session/{session_id}")
 async def get_session(session_id: str, _: str = Depends(verify_api_key)):
@@ -83,6 +98,16 @@ async def get_session(session_id: str, _: str = Depends(verify_api_key)):
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Compatible with pydantic v1 and v2
+    intel = session.intelligence
+    intel_dict = {
+        "bankAccounts": intel.bankAccounts,
+        "upiIds": intel.upiIds,
+        "phoneNumbers": intel.phoneNumbers,
+        "phishingLinks": intel.phishingLinks,
+        "suspiciousKeywords": intel.suspiciousKeywords
+    }
     
     return {
         "status": "success",
@@ -93,7 +118,7 @@ async def get_session(session_id: str, _: str = Depends(verify_api_key)):
             "totalMessages": session.totalMessages,
             "conversationComplete": session.conversationComplete,
             "callbackSent": session.callbackSent,
-            "intelligence": session.intelligence.model_dump(),
+            "intelligence": intel_dict,
             "completionScore": decision_engine.get_completion_score(session)
         }
     }
