@@ -2,43 +2,40 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
 
 
 class Message(BaseModel):
     """Message from scammer."""
-    sender: str = Field(..., description="Sender identifier")
-    text: str = Field(..., description="Message content")
-    timestamp: Optional[str] = Field(default=None, description="Message timestamp")
+    sender: str = ""
+    text: str = ""
+    timestamp: Optional[str] = None
     
     class Config:
-        populate_by_name = True
+        extra = "allow"
 
 
 class ChatRequest(BaseModel):
-    """Incoming chat request payload.
-    
-    Supports multiple payload formats:
-    - Standard: {"sessionId": "...", "message": {...}}
-    - Flat: {"sessionId": "...", "sender": "...", "text": "...", "timestamp": "..."}
-    """
-    sessionId: str = Field(..., alias="session_id", description="Unique session identifier")
-    message: Optional[Message] = Field(default=None, description="Message object")
+    """Incoming chat request payload."""
+    sessionId: Optional[str] = Field(default=None, alias="session_id")
+    message: Optional[Message] = None
     
     # Flat format fields
-    sender: Optional[str] = Field(default=None, description="Sender (flat format)")
-    text: Optional[str] = Field(default=None, description="Message text (flat format)")
-    timestamp: Optional[str] = Field(default=None, description="Timestamp (flat format)")
+    sender: Optional[str] = None
+    text: Optional[str] = None
+    timestamp: Optional[str] = None
     
     class Config:
+        extra = "allow"
         populate_by_name = True
+    
+    def get_session_id(self) -> str:
+        """Get session ID from various possible fields."""
+        return self.sessionId or "default_session"
     
     def get_message(self) -> Message:
         """Get the message, supporting both nested and flat formats."""
         if self.message:
             return self.message
-        
-        # Build message from flat fields
         return Message(
             sender=self.sender or "unknown",
             text=self.text or "",

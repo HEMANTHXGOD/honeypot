@@ -1,34 +1,28 @@
-"""Configuration management using pydantic-settings."""
+"""Configuration management."""
 
-from pydantic_settings import BaseSettings
-from functools import lru_cache
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-class Settings(BaseSettings):
+class Settings:
     """Application settings loaded from environment variables."""
     
-    # API Authentication
-    API_KEY: str = "default_key_change_me"
-    
-    # Groq LLM API
-    GROQ_API_KEY: str = ""
-    
-    # GUVI Callback Endpoint
-    GUVI_CALLBACK_URL: str = "https://example.com/callback"
-    
-    # Scam Detection Thresholds
-    HEURISTIC_THRESHOLD: int = 3  # Minimum keyword matches for scam
-    MAX_MESSAGES_BEFORE_COMPLETE: int = 15
-    
-    # Callback Timeout
-    CALLBACK_TIMEOUT_SECONDS: int = 5
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    def __init__(self):
+        self.API_KEY = os.getenv("API_KEY", "default_key_change_me")
+        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+        self.GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "https://hackathon.guvi.in/api/updateHoneyPotFinalResult")
+        self.HEURISTIC_THRESHOLD = int(os.getenv("HEURISTIC_THRESHOLD", "3"))
+        self.MAX_MESSAGES_BEFORE_COMPLETE = int(os.getenv("MAX_MESSAGES_BEFORE_COMPLETE", "15"))
+        self.CALLBACK_TIMEOUT_SECONDS = int(os.getenv("CALLBACK_TIMEOUT_SECONDS", "5"))
 
 
-@lru_cache()
+_settings = None
+
 def get_settings() -> Settings:
-    """Cached settings instance."""
-    return Settings()
+    """Get settings instance."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings

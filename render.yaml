@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: honeypot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    envVars:
+      - key: API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GUVI_CALLBACK_URL
+        value: https://hackathon.guvi.in/api/updateHoneyPotFinalResult
+      - key: PYTHON_VERSION
+        value: 3.11.4
