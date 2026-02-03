@@ -293,6 +293,16 @@ def honeypot(req: IncomingRequest):
 def chat(req: IncomingRequest):
     return honeypot(req)
 
+# Alias for /api/message endpoint (GUVI tester uses this)
+@app.post("/api/message")
+def api_message(req: IncomingRequest):
+    return honeypot(req)
+
+# Alias for /message endpoint
+@app.post("/message")
+def message(req: IncomingRequest):
+    return honeypot(req)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
