@@ -4,3 +4,4 @@ gunicorn
 pydantic
 requests
 python-dotenv
+httpx

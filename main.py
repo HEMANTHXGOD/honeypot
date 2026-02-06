@@ -1,11 +1,16 @@
 import os
 import re
 import time
-import requests
+import httpx
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+
+# ---------------- LOGGING ---------------- #
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 # ---------------- CONFIG ---------------- #
 
@@ -82,40 +87,42 @@ async def api_key_auth(request: Request, call_next):
         return await call_next(request)
     
     if request.headers.get("x-api-key") != API_KEY:
+        logger.warning(f"Unauthorized access attempt from {request.client.host}")
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return await call_next(request)
 
 # ---------------- GROQ API HELPER ---------------- #
 
-def call_groq(messages: list, model: str = "llama-3.3-70b-versatile", temperature: float = 0.7) -> str:
-    """Call Groq API using requests (no SDK needed)."""
+async def call_groq(messages: list, model: str = "llama-3.3-70b-versatile", temperature: float = 0.7) -> Optional[str]:
+    """Call Groq API using httpx (Async)."""
     if not GROQ_API_KEY:
+        logger.error("GROQ_API_KEY is not set.")
         return None
     
     try:
-        response = requests.post(
-            GROQ_API_URL,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": 150
-            },
-            timeout=15
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": 150
+                }
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"Groq API error: {e}")
+        logger.error(f"Groq API error: {e}")
         return None
 
 # ---------------- SCAM DETECTOR ---------------- #
 
-def detect_scam_llm(text: str) -> bool:
+async def detect_scam_llm(text: str) -> bool:
     prompt = f"""Classify the following message as:
 SCAM, NOT_SCAM, or UNCERTAIN.
 
@@ -124,7 +131,7 @@ Message:
 
 Respond with ONE word only."""
 
-    result = call_groq(
+    result = await call_groq(
         [{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
         temperature=0
@@ -152,7 +159,7 @@ Goal: keep the sender talking and extract details.
 
 Keep replies under 2 sentences."""
 
-def agent_reply(history: List[Message], incoming: str) -> str:
+async def agent_reply(history: List[Message], incoming: str) -> str:
     convo = ""
     for m in history[-10:]:  # Keep last 10 messages
         convo += f"{m.sender.upper()}: {m.text}\n"
@@ -165,7 +172,7 @@ Latest message:
 
 Reply as the user. Keep it short (1-2 sentences), natural, and slightly worried."""
 
-    result = call_groq(
+    result = await call_groq(
         [
             {"role": "system", "content": AGENT_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
@@ -200,7 +207,7 @@ def extract_intel(text: str, intel: Dict[str, list]):
 
 # ---------------- CALLBACK ---------------- #
 
-def send_final_callback(session_id: str, state: Dict[str, Any]):
+async def send_final_callback(session_id: str, state: Dict[str, Any]):
     payload = {
         "sessionId": session_id,
         "scamDetected": True,
@@ -208,12 +215,13 @@ def send_final_callback(session_id: str, state: Dict[str, Any]):
         "extractedIntelligence": state["intelligence"],
         "agentNotes": state["agentNotes"]
     }
-    print(f"[{session_id}] Sending GUVI callback: {payload}")
+    logger.info(f"[{session_id}] Sending GUVI callback: {payload}")
     try:
-        resp = requests.post(GUVI_CALLBACK_URL, json=payload, timeout=5)
-        print(f"[{session_id}] GUVI callback response: {resp.status_code}")
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(GUVI_CALLBACK_URL, json=payload)
+            logger.info(f"[{session_id}] GUVI callback response: {resp.status_code}")
     except Exception as e:
-        print(f"[{session_id}] GUVI callback error: {e}")
+        logger.error(f"[{session_id}] GUVI callback error: {e}")
 
 # ---------------- ENDPOINTS ---------------- #
 
@@ -235,73 +243,87 @@ def health():
     return {"status": "healthy"}
 
 @app.post("/honeypot")
-def honeypot(req: IncomingRequest):
+async def honeypot(req: IncomingRequest):
     sid = req.sessionId
-    msg = req.get_message().text
+    msg_obj = req.get_message()
+    msg = msg_obj.text
+    
+    try:
+        if sid not in sessions:
+            sessions[sid] = {
+                "scamDetected": False,
+                "agentActivated": False,
+                "totalMessages": 0,
+                "conversationComplete": False,
+                "intelligence": {
+                    "bankAccounts": [],
+                    "upiIds": [],
+                    "phishingLinks": [],
+                    "phoneNumbers": [],
+                    "suspiciousKeywords": []
+                },
+                "agentNotes": "",
+                "history": []
+            }
 
-    if sid not in sessions:
-        sessions[sid] = {
-            "scamDetected": False,
-            "agentActivated": False,
-            "totalMessages": 0,
-            "conversationComplete": False,
-            "intelligence": {
-                "bankAccounts": [],
-                "upiIds": [],
-                "phishingLinks": [],
-                "phoneNumbers": [],
-                "suspiciousKeywords": []
-            },
-            "agentNotes": "",
-            "history": []
-        }
+        state = sessions[sid]
+        state["totalMessages"] += 1
+        state["history"].append(msg_obj)
 
-    state = sessions[sid]
-    state["totalMessages"] += 1
-    state["history"].append(req.get_message())
+        # Scam detection
+        if not state["scamDetected"]:
+            # Check heuristics first (fast)
+            if heuristic_score(msg) >= 2:
+                state["scamDetected"] = True
+                state["agentActivated"] = True
+                state["agentNotes"] = "Used urgency and account threat (heuristic)"
+            # Check LLM second (slow, async)
+            elif await detect_scam_llm(msg):
+                state["scamDetected"] = True
+                state["agentActivated"] = True
+                state["agentNotes"] = "Used urgency and account threat (LLM)"
 
-    # Scam detection
-    if not state["scamDetected"]:
-        if heuristic_score(msg) >= 2 or detect_scam_llm(msg):
-            state["scamDetected"] = True
-            state["agentActivated"] = True
-            state["agentNotes"] = "Used urgency and account threat"
+        # Extract intelligence
+        extract_intel(msg, state["intelligence"])
 
-    # Extract intelligence
-    extract_intel(msg, state["intelligence"])
+        # Decision to stop
+        if (
+            state["intelligence"]["upiIds"] or
+            state["intelligence"]["phishingLinks"] or
+            state["totalMessages"] > 15
+        ):
+            if not state["conversationComplete"]:
+                state["conversationComplete"] = True
+                # Fire and forget callback (or await if critical)
+                # For robustness, we await it here but could use BackgroundTasks
+                await send_final_callback(sid, state)
 
-    # Decision to stop
-    if (
-        state["intelligence"]["upiIds"] or
-        state["intelligence"]["phishingLinks"] or
-        state["totalMessages"] > 15
-    ):
-        if not state["conversationComplete"]:
-            state["conversationComplete"] = True
-            send_final_callback(sid, state)
+        # Agent reply
+        if state["agentActivated"]:
+            reply = await agent_reply(state["history"], msg)
+        else:
+            reply = "Sorry, I didn't understand."
 
-    # Agent reply
-    if state["agentActivated"]:
-        reply = agent_reply(state["history"], msg)
-    else:
-        reply = "Sorry, I didn't understand."
-
-    return {"status": "success", "reply": reply}
+        return {"status": "success", "reply": reply}
+    
+    except Exception as e:
+        logger.error(f"Error processing honeypot request: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Alias for /chat endpoint
 @app.post("/chat")
-def chat(req: IncomingRequest):
-    return honeypot(req)
+async def chat(req: IncomingRequest):
+    return await honeypot(req)
 
 # Alias for /api/message endpoint (GUVI tester uses this)
 @app.post("/api/message")
-def api_message(req: IncomingRequest):
-    return honeypot(req)
+async def api_message(req: IncomingRequest):
+    return await honeypot(req)
 
 # Alias for /message endpoint
 @app.post("/message")
-def message(req: IncomingRequest):
-    return honeypot(req)
+async def message(req: IncomingRequest):
+    return await honeypot(req)
 
 if __name__ == "__main__":
     import uvicorn
